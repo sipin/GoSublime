@@ -125,8 +125,9 @@ class GoSublime(sublime_plugin.EventListener):
 			'fn': view.file_name() or '',
 		}
 		show_snippets = gs.setting('autocomplete_snippets', True) is True
+		fn = view.file_name() or '<stdin>'
 
-		if not pkgname:
+		if not fn.endswith(".gohtml") and not pkgname:
 			return (resolve_snippets(ctx), AC_OPTS) if show_snippets else ([], AC_OPTS)
 
 		# gocode is case-sesitive so push the location back to the 'dot' so it gives
@@ -134,7 +135,9 @@ class GoSublime(sublime_plugin.EventListener):
 		offset = pos - len(prefix)
 		src = view.substr(sublime.Region(0, view.size()))
 
-		fn = view.file_name() or '<stdin>'
+		if fn.endswith(".gohtml"):
+			src, offset = self.get_gohtml_src(default_pkgname, src, pos)
+			
 		if not src:
 			return ([], AC_OPTS)
 
@@ -150,6 +153,61 @@ class GoSublime(sublime_plugin.EventListener):
 				ctx['local'] = True
 				cl.extend(resolve_snippets(ctx))
 		return (cl, AC_OPTS)
+
+	def get_extra_gohtml_src(self, src, i, pos):
+		extra_src = u""
+		try:
+			i = src.index("@{", i)
+		except ValueError:
+			return extra_src
+
+		counter = 0
+		while i < pos:
+			j = src.index("\n", i)
+			if j >= pos:
+				break
+
+			if not src[i] == "<":
+				i += 1
+			line = src[i:j+1].strip()
+			if not line.startswith("<") and line != "{":
+				extra_src += line + "\n"
+			if line.endswith("{"):
+				counter += 1
+			if line.startswith("}"):
+				counter -= 1
+
+			if line == "}" and counter == 0:
+				try:
+					i = src.index("@{", j)
+				except ValueError:
+					return extra_src
+			else:
+				i = j + 1
+
+		return extra_src
+
+
+	def get_gohtml_src(self, default_pkgname, src, pos):
+		if src == None or not src.startswith("@{"):
+			return None, 0
+
+		i = src.rindex("\n", 0, pos)
+		line = src[i:pos].strip()
+		if line.startswith("@"):
+			line = u"\n" + line[1:]
+		else:
+			line = u"\n" + line
+		
+		i = src.index("}")
+		extra_src = self.get_extra_gohtml_src(src, i, pos)
+		go_source = "package " + default_pkgname + "\n" + src[2:i]
+		i = go_source.index(")") + 1
+
+		go_source = go_source[0:i] + "\nfunc main(){\n raw := func(string)string{}\n" + go_source[i:] + extra_src + line + "\n}"
+		offset = len(go_source) - 2
+		
+		return go_source, offset
 
 	def find_end_pt(self, view, pat, start, end, flags=sublime.LITERAL):
 		r = view.find(pat, start, flags)
